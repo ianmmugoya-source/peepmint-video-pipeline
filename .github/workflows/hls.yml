@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: "Public MP4 URL"
+        description: "Public MP4 URL (R2 direct)"
         required: true
       video_id:
         description: "Video ID"
@@ -16,19 +16,28 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # ✅ FIXED
 
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Download MP4
         run: |
+          echo "Downloading video..."
           curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
+          ls -lh input.mp4
+
+      - name: Validate file
+        run: |
+          if [ ! -s input.mp4 ]; then
+            echo "Download failed or file empty"
+            exit 1
+          fi
 
       - name: Convert to HLS
         run: |
           mkdir output
-          ffmpeg -i input.mp4 \
+          ffmpeg -y -i input.mp4 \
             -vf "scale=720:-2" \
             -c:v libx264 -preset veryfast -crf 28 \
             -c:a aac -b:a 96k \
