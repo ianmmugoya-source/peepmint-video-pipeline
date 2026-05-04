@@ -13,80 +13,63 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg curl
 
+      # ===============================
+      # 1. DOWNLOAD ORIGINAL VIDEO
+      # ===============================
       - name: Download video
         run: |
           mkdir input
           curl -L "${{ github.event.client_payload.video_url }}" -o input/video.mp4
-          ls -lh input/video.mp4
 
-      - name: Validate file
-        run: |
           if [ ! -s input/video.mp4 ]; then
-            echo "Video download failed"
+            echo "Download failed"
             exit 1
           fi
 
-      - name: Transcode to HLS (LOW DATA MODE)
+      # ===============================
+      # 2. LOW DATA MODE HLS ENCODING
+      # ===============================
+      - name: Transcode (TikTok Low Data Mode)
         run: |
           mkdir output
 
           ffmpeg -y -i input/video.mp4 \
-          -vf "scale=720:-2" \
-          -c:v libx264 -preset veryfast -crf 28 \
-          -c:a aac -b:a 96k \
-          -hls_time 4 \
-          -hls_playlist_type vod \
-          -hls_segment_filename "output/segment_%03d.ts" \
-          output/master.m3u8
+            -vf "scale=720:-2" \
+            -c:v libx264 -preset veryfast -crf 30 \
+            -c:a aac -b:a 96k \
+            -hls_time 4 \
+            -hls_playlist_type vod \
+            -hls_flags independent_segments \
+            -hls_segment_filename "output/seg_%03d.ts" \
+            output/master.m3u8
 
-      - name: Upload to R2
+      # ===============================
+      # 3. UPLOAD TO R2 (NO AWS SDK)
+      # ===============================
+      - name: Upload HLS to R2
         run: |
-          npm install -g @aws-sdk/client-s3
+          for file in output/*; do
 
-          node <<EOF
-          const fs = require("fs");
-          const path = require("path");
-          const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+            echo "Uploading $file"
 
-          const client = new S3Client({
-            region: "auto",
-            endpoint: process.env.R2_ENDPOINT,
-            credentials: {
-              accessKeyId: process.env.R2_ACCESS_KEY,
-              secretAccessKey: process.env.R2_SECRET_KEY
-            }
-          });
+            curl -X PUT \
+              -H "Authorization: Bearer $R2_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$file" \
+              "$R2_PUBLIC_URL/videos/$USER_ID/$VIDEO_ID/$(basename $file)"
 
-          const dir = "output";
-          const files = fs.readdirSync(dir);
-
-          for (const file of files) {
-            const filePath = path.join(dir, file);
-            const body = fs.readFileSync(filePath);
-
-            await client.send(new PutObjectCommand({
-              Bucket: process.env.R2_BUCKET,
-              Key: `videos/${process.env.USER_ID}/${process.env.VIDEO_ID}/${file}`,
-              Body: body,
-              ContentType: file.endsWith(".m3u8")
-                ? "application/vnd.apple.mpegurl"
-                : "video/mp2t"
-            }));
-
-            console.log("Uploaded:", file);
-          }
-          EOF
+          done
 
         env:
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
-          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
-          R2_BUCKET: apppeepmint
+          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+          R2_TOKEN: ${{ secrets.R2_TOKEN }}
           USER_ID: ${{ github.event.client_payload.user_id }}
           VIDEO_ID: ${{ github.event.client_payload.video_id }}
 
-      - name: (Optional) Delete original MP4
-        run: |
-          echo "Skipping delete for now"
+      # ===============================
+      # 4. CLEANUP (OPTIONAL BUT RECOMMENDED)
+      # ===============================
+      - name: Cleanup
+        run: rm -rf input output
