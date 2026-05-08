@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # ===============================
       # 1. CHECKOUT
       # ===============================
@@ -16,26 +17,39 @@ jobs:
         uses: actions/checkout@v4
 
       # ===============================
-      # 2. INSTALL DEPENDENCIES
+      # 2. DEBUG DISPATCH (TEMP)
+      # ===============================
+      - name: DEBUG DISPATCH
+        run: |
+          echo "VIDEO URL = ${{ github.event.client_payload.video_url }}"
+          echo "VIDEO ID = ${{ github.event.client_payload.video_id }}"
+          echo "USER ID = ${{ github.event.client_payload.user_id }}"
+
+      # ===============================
+      # 3. INSTALL DEPENDENCIES
       # ===============================
       - name: Install ffmpeg + curl
         run: sudo apt-get update && sudo apt-get install -y ffmpeg curl
 
       # ===============================
-      # 3. DOWNLOAD ORIGINAL VIDEO (MP4)
+      # 4. DOWNLOAD ORIGINAL VIDEO (MP4)
       # ===============================
       - name: Download video
         run: |
           mkdir input
-          curl -L "${{ github.event.client_payload.video_url }}" -o input/video.mp4
+
+          curl -L "${{ github.event.client_payload.video_url }}" \
+            -o input/video.mp4
 
           if [ ! -s input/video.mp4 ]; then
             echo "❌ Download failed"
             exit 1
           fi
 
+          echo "✅ Video downloaded"
+
       # ===============================
-      # 4. TRANSCODE TO HLS (LOW DATA MODE)
+      # 5. TRANSCODE TO HLS
       # ===============================
       - name: Transcode to HLS
         run: |
@@ -43,20 +57,41 @@ jobs:
 
           ffmpeg -y -i input/video.mp4 \
             -vf "scale=720:-2" \
-            -c:v libx264 -preset veryfast -crf 30 \
-            -c:a aac -b:a 96k \
+            -c:v libx264 \
+            -preset veryfast \
+            -crf 30 \
+            -c:a aac \
+            -b:a 96k \
             -hls_time 4 \
             -hls_playlist_type vod \
             -hls_flags independent_segments \
             -hls_segment_filename "output/seg_%03d.ts" \
             output/master.m3u8
 
+          echo "✅ HLS transcoding finished"
+
       # ===============================
-      # 5. UPLOAD HLS FILES TO R2
+      # 6. VERIFY HLS OUTPUT
+      # ===============================
+      - name: Verify HLS output
+        run: |
+          echo "FILES GENERATED:"
+          ls -lah output
+
+          if [ ! -f output/master.m3u8 ]; then
+            echo "❌ master.m3u8 missing"
+            exit 1
+          fi
+
+          echo "✅ HLS verified"
+
+      # ===============================
+      # 7. UPLOAD HLS FILES TO R2
       # ===============================
       - name: Upload HLS to R2
         run: |
           for file in output/*; do
+
             echo "Uploading $file"
 
             curl -X PUT \
@@ -64,7 +99,11 @@ jobs:
               -H "Content-Type: application/octet-stream" \
               --data-binary @"$file" \
               "$R2_PUBLIC_URL/videos/$USER_ID/$VIDEO_ID/$(basename $file)"
+
           done
+
+          echo "✅ Upload complete"
+
         env:
           R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
           R2_TOKEN: ${{ secrets.R2_TOKEN }}
@@ -72,22 +111,27 @@ jobs:
           VIDEO_ID: ${{ github.event.client_payload.video_id }}
 
       # ===============================
-      # 6. UPDATE SUPABASE WITH PLAYBACK URL (🔥 IMPORTANT)
+      # 8. SAVE PLAYBACK URL TO SUPABASE
       # ===============================
       - name: Save HLS playback URL to Supabase
         run: |
           PLAYBACK_URL="$R2_PUBLIC_URL/videos/$USER_ID/$VIDEO_ID/master.m3u8"
 
-          echo "Playback URL: $PLAYBACK_URL"
+          echo "Playback URL:"
+          echo "$PLAYBACK_URL"
 
-          curl -X PATCH "$SUPABASE_URL/rest/v1/videos?video_id=eq.$VIDEO_ID" \
+          curl -X PATCH \
+            "$SUPABASE_URL/rest/v1/videos?id=eq.$VIDEO_ID" \
             -H "apikey: $SUPABASE_SERVICE_ROLE" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE" \
             -H "Content-Type: application/json" \
+            -H "Prefer: return=representation" \
             -d "{
-              \"video_url\": \"$PLAYBACK_URL\",
-              \"status\": \"ready\"
+              \"video_url\": \"$PLAYBACK_URL\"
             }"
+
+          echo "✅ Supabase updated"
+
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
@@ -96,7 +140,7 @@ jobs:
           VIDEO_ID: ${{ github.event.client_payload.video_id }}
 
       # ===============================
-      # 7. CLEANUP
+      # 9. CLEANUP
       # ===============================
       - name: Cleanup
         run: rm -rf input output
