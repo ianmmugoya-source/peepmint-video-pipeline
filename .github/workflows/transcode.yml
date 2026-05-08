@@ -11,13 +11,7 @@ jobs:
     steps:
 
       # =====================================
-      # 1. CHECKOUT
-      # =====================================
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # =====================================
-      # 2. DEBUG PAYLOAD
+      # 1. DEBUG PAYLOAD
       # =====================================
       - name: Debug Dispatch
         run: |
@@ -26,15 +20,13 @@ jobs:
           echo "USER ID = ${{ github.event.client_payload.user_id }}"
 
       # =====================================
-      # 3. INSTALL FFMPEG
+      # 2. FAST FFMPEG (NO INSTALL TIME)
       # =====================================
-      - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+      - name: Setup FFmpeg (fast)
+        uses: FedericoCarboni/setup-ffmpeg@v3
 
       # =====================================
-      # 4. DOWNLOAD VIDEO
+      # 3. DOWNLOAD VIDEO
       # =====================================
       - name: Download Video
         run: |
@@ -51,7 +43,7 @@ jobs:
           echo "✅ Download complete"
 
       # =====================================
-      # 5. TRANSCODE TO HLS
+      # 4. TRANSCODE TO HLS
       # =====================================
       - name: Transcode HLS
         run: |
@@ -74,7 +66,7 @@ jobs:
           echo "✅ HLS generated"
 
       # =====================================
-      # 6. VERIFY OUTPUT
+      # 5. VERIFY OUTPUT
       # =====================================
       - name: Verify Output
         run: |
@@ -88,24 +80,9 @@ jobs:
           echo "✅ Verification passed"
 
       # =====================================
-      # 7. SETUP NODE
-      # =====================================
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      # =====================================
-      # 8. INSTALL AWS SDK
-      # =====================================
-      - name: Install AWS SDK
-        run: npm install @aws-sdk/client-s3
-
-      # =====================================
-      # 9. UPLOAD HLS FILES TO R2
+      # 6. UPLOAD TO R2 (NO REINSTALLS)
       # =====================================
       - name: Upload HLS to R2
-
         env:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
@@ -122,7 +99,6 @@ jobs:
 
           const fs = require("fs");
           const path = require("path");
-
           const {
             S3Client,
             PutObjectCommand
@@ -144,16 +120,10 @@ jobs:
             for (const file of files) {
 
               const filePath = path.join("output", file);
-
               const body = fs.readFileSync(filePath);
 
               const key =
-                "videos/" +
-                process.env.USER_ID +
-                "/" +
-                process.env.VIDEO_ID +
-                "/" +
-                file;
+                `videos/${process.env.USER_ID}/${process.env.VIDEO_ID}/${file}`;
 
               await client.send(
                 new PutObjectCommand({
@@ -178,7 +148,7 @@ jobs:
           EOF
 
       # =====================================
-      # 10. UPDATE SUPABASE
+      # 7. UPDATE SUPABASE
       # =====================================
       - name: Update Playback URL
         env:
@@ -208,7 +178,7 @@ jobs:
           echo "✅ Supabase updated"
 
       # =====================================
-      # 11. CLEANUP
+      # 8. CLEANUP
       # =====================================
       - name: Cleanup
         run: rm -rf input output
