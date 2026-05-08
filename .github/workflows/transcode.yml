@@ -10,33 +10,35 @@ jobs:
 
     steps:
 
-      # ===============================
+      # =====================================
       # 1. CHECKOUT
-      # ===============================
+      # =====================================
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ===============================
-      # 2. DEBUG DISPATCH (TEMP)
-      # ===============================
-      - name: DEBUG DISPATCH
+      # =====================================
+      # 2. DEBUG PAYLOAD
+      # =====================================
+      - name: Debug Dispatch
         run: |
           echo "VIDEO URL = ${{ github.event.client_payload.video_url }}"
           echo "VIDEO ID = ${{ github.event.client_payload.video_id }}"
           echo "USER ID = ${{ github.event.client_payload.user_id }}"
 
-      # ===============================
-      # 3. INSTALL DEPENDENCIES
-      # ===============================
-      - name: Install ffmpeg + curl
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg curl
-
-      # ===============================
-      # 4. DOWNLOAD ORIGINAL VIDEO (MP4)
-      # ===============================
-      - name: Download video
+      # =====================================
+      # 3. INSTALL FFMPEG
+      # =====================================
+      - name: Install FFmpeg
         run: |
-          mkdir input
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      # =====================================
+      # 4. DOWNLOAD VIDEO
+      # =====================================
+      - name: Download Video
+        run: |
+          mkdir -p input
 
           curl -L "${{ github.event.client_payload.video_url }}" \
             -o input/video.mp4
@@ -46,16 +48,17 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Video downloaded"
+          echo "✅ Download complete"
 
-      # ===============================
+      # =====================================
       # 5. TRANSCODE TO HLS
-      # ===============================
-      - name: Transcode to HLS
+      # =====================================
+      - name: Transcode HLS
         run: |
-          mkdir output
+          mkdir -p output
 
-          ffmpeg -y -i input/video.mp4 \
+          ffmpeg -y \
+            -i input/video.mp4 \
             -vf "scale=720:-2" \
             -c:v libx264 \
             -preset veryfast \
@@ -68,14 +71,13 @@ jobs:
             -hls_segment_filename "output/seg_%03d.ts" \
             output/master.m3u8
 
-          echo "✅ HLS transcoding finished"
+          echo "✅ HLS generated"
 
-      # ===============================
-      # 6. VERIFY HLS OUTPUT
-      # ===============================
-      - name: Verify HLS output
+      # =====================================
+      # 6. VERIFY OUTPUT
+      # =====================================
+      - name: Verify Output
         run: |
-          echo "FILES GENERATED:"
           ls -lah output
 
           if [ ! -f output/master.m3u8 ]; then
@@ -83,38 +85,102 @@ jobs:
             exit 1
           fi
 
-          echo "✅ HLS verified"
+          echo "✅ Verification passed"
 
-      # ===============================
-      # 7. UPLOAD HLS FILES TO R2
-      # ===============================
+      # =====================================
+      # 7. SETUP NODE
+      # =====================================
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # =====================================
+      # 8. INSTALL AWS SDK
+      # =====================================
+      - name: Install AWS SDK
+        run: npm install @aws-sdk/client-s3
+
+      # =====================================
+      # 9. UPLOAD HLS FILES TO R2
+      # =====================================
       - name: Upload HLS to R2
-        run: |
-          for file in output/*; do
-
-            echo "Uploading $file"
-
-            curl -X PUT \
-              -H "Authorization: Bearer $R2_TOKEN" \
-              -H "Content-Type: application/octet-stream" \
-              --data-binary @"$file" \
-              "$R2_PUBLIC_URL/videos/$USER_ID/$VIDEO_ID/$(basename $file)"
-
-          done
-
-          echo "✅ Upload complete"
-
         env:
-          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
-          R2_TOKEN: ${{ secrets.R2_TOKEN }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
           USER_ID: ${{ github.event.client_payload.user_id }}
           VIDEO_ID: ${{ github.event.client_payload.video_id }}
 
-      # ===============================
-      # 8. SAVE PLAYBACK URL TO SUPABASE
-      # ===============================
-      - name: Save HLS playback URL to Supabase
         run: |
+          node <<'EOF'
+
+          const fs = require("fs");
+          const path = require("path");
+
+          const {
+            S3Client,
+            PutObjectCommand
+          } = require("@aws-sdk/client-s3");
+
+          async function main() {
+
+            const client = new S3Client({
+              region: "auto",
+              endpoint: process.env.R2_ENDPOINT,
+              credentials: {
+                accessKeyId: process.env.R2_ACCESS_KEY,
+                secretAccessKey: process.env.R2_SECRET_KEY
+              }
+            });
+
+            const files = fs.readdirSync("output");
+
+            for (const file of files) {
+
+              const filePath = path.join("output", file);
+
+              const body = fs.readFileSync(filePath);
+
+              const key =
+                `videos/${process.env.USER_ID}/${process.env.VIDEO_ID}/${file}`;
+
+              await client.send(
+                new PutObjectCommand({
+                  Bucket: process.env.R2_BUCKET,
+                  Key: key,
+                  Body: body,
+                  ContentType: file.endsWith(".m3u8")
+                    ? "application/vnd.apple.mpegurl"
+                    : "video/mp2t"
+                })
+              );
+
+              console.log("✅ Uploaded:", key);
+            }
+          }
+
+          main().catch(err => {
+            console.error(err);
+            process.exit(1);
+          });
+
+          EOF
+
+      # =====================================
+      # 10. UPDATE SUPABASE
+      # =====================================
+      - name: Update Playback URL
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+          USER_ID: ${{ github.event.client_payload.user_id }}
+          VIDEO_ID: ${{ github.event.client_payload.video_id }}
+
+        run: |
+
           PLAYBACK_URL="$R2_PUBLIC_URL/videos/$USER_ID/$VIDEO_ID/master.m3u8"
 
           echo "Playback URL:"
@@ -132,15 +198,8 @@ jobs:
 
           echo "✅ Supabase updated"
 
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
-          USER_ID: ${{ github.event.client_payload.user_id }}
-          VIDEO_ID: ${{ github.event.client_payload.video_id }}
-
-      # ===============================
-      # 9. CLEANUP
-      # ===============================
+      # =====================================
+      # 11. CLEANUP
+      # =====================================
       - name: Cleanup
         run: rm -rf input output
