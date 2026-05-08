@@ -67,8 +67,8 @@ jobs:
           ffmpeg -y \
             -i input/video.mp4 \
             -c:v libx264 \
-            -preset ultrafast \
-            -crf 32 \
+            -preset superfast \
+            -crf 34 \
             -c:a aac \
             -b:a 96k \
             -hls_time 6 \
