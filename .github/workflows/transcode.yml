@@ -105,6 +105,7 @@ jobs:
       # 9. UPLOAD HLS FILES TO R2
       # =====================================
       - name: Upload HLS to R2
+
         env:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
@@ -114,6 +115,9 @@ jobs:
           VIDEO_ID: ${{ github.event.client_payload.video_id }}
 
         run: |
+
+          npm install @aws-sdk/client-s3
+
           node <<'EOF'
 
           const fs = require("fs");
@@ -124,7 +128,7 @@ jobs:
             PutObjectCommand
           } = require("@aws-sdk/client-s3");
 
-          async function main() {
+          async function upload() {
 
             const client = new S3Client({
               region: "auto",
@@ -144,7 +148,12 @@ jobs:
               const body = fs.readFileSync(filePath);
 
               const key =
-                `videos/${process.env.USER_ID}/${process.env.VIDEO_ID}/${file}`;
+                "videos/" +
+                process.env.USER_ID +
+                "/" +
+                process.env.VIDEO_ID +
+                "/" +
+                file;
 
               await client.send(
                 new PutObjectCommand({
@@ -161,7 +170,7 @@ jobs:
             }
           }
 
-          main().catch(err => {
+          upload().catch(err => {
             console.error(err);
             process.exit(1);
           });
