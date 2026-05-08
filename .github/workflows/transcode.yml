@@ -20,13 +20,27 @@ jobs:
           echo "USER ID = ${{ github.event.client_payload.user_id }}"
 
       # =====================================
-      # 2. FAST FFMPEG (NO INSTALL TIME)
+      # 2. FAST FFMPEG
       # =====================================
-      - name: Setup FFmpeg (fast)
+      - name: Setup FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
 
       # =====================================
-      # 3. DOWNLOAD VIDEO
+      # 3. SETUP NODE
+      # =====================================
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # =====================================
+      # 4. INSTALL AWS SDK
+      # =====================================
+      - name: Install AWS SDK
+        run: npm install @aws-sdk/client-s3
+
+      # =====================================
+      # 5. DOWNLOAD VIDEO
       # =====================================
       - name: Download Video
         run: |
@@ -43,21 +57,21 @@ jobs:
           echo "✅ Download complete"
 
       # =====================================
-      # 4. TRANSCODE TO HLS
+      # 6. FAST TRANSCODE
       # =====================================
       - name: Transcode HLS
         run: |
+
           mkdir -p output
 
           ffmpeg -y \
             -i input/video.mp4 \
-            -vf "scale=720:-2" \
             -c:v libx264 \
-            -preset veryfast \
-            -crf 30 \
+            -preset ultrafast \
+            -crf 32 \
             -c:a aac \
             -b:a 96k \
-            -hls_time 4 \
+            -hls_time 6 \
             -hls_playlist_type vod \
             -hls_flags independent_segments \
             -hls_segment_filename "output/seg_%03d.ts" \
@@ -66,10 +80,11 @@ jobs:
           echo "✅ HLS generated"
 
       # =====================================
-      # 5. VERIFY OUTPUT
+      # 7. VERIFY OUTPUT
       # =====================================
       - name: Verify Output
         run: |
+
           ls -lah output
 
           if [ ! -f output/master.m3u8 ]; then
@@ -80,9 +95,10 @@ jobs:
           echo "✅ Verification passed"
 
       # =====================================
-      # 6. UPLOAD TO R2 (NO REINSTALLS)
+      # 8. UPLOAD HLS TO R2
       # =====================================
       - name: Upload HLS to R2
+
         env:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
@@ -93,12 +109,11 @@ jobs:
 
         run: |
 
-          npm install @aws-sdk/client-s3
-
           node <<'EOF'
 
           const fs = require("fs");
           const path = require("path");
+
           const {
             S3Client,
             PutObjectCommand
@@ -120,6 +135,7 @@ jobs:
             for (const file of files) {
 
               const filePath = path.join("output", file);
+
               const body = fs.readFileSync(filePath);
 
               const key =
@@ -148,9 +164,10 @@ jobs:
           EOF
 
       # =====================================
-      # 7. UPDATE SUPABASE
+      # 9. UPDATE SUPABASE
       # =====================================
       - name: Update Playback URL
+
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
@@ -178,7 +195,7 @@ jobs:
           echo "✅ Supabase updated"
 
       # =====================================
-      # 8. CLEANUP
+      # 10. CLEANUP
       # =====================================
       - name: Cleanup
         run: rm -rf input output
