@@ -9,14 +9,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ===============================
+      # 1. CHECKOUT
+      # ===============================
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install ffmpeg
+      # ===============================
+      # 2. INSTALL DEPENDENCIES
+      # ===============================
+      - name: Install ffmpeg + curl
         run: sudo apt-get update && sudo apt-get install -y ffmpeg curl
 
       # ===============================
-      # 1. DOWNLOAD ORIGINAL VIDEO
+      # 3. DOWNLOAD ORIGINAL VIDEO (MP4)
       # ===============================
       - name: Download video
         run: |
@@ -24,14 +30,14 @@ jobs:
           curl -L "${{ github.event.client_payload.video_url }}" -o input/video.mp4
 
           if [ ! -s input/video.mp4 ]; then
-            echo "Download failed"
+            echo "❌ Download failed"
             exit 1
           fi
 
       # ===============================
-      # 2. LOW DATA MODE HLS ENCODING
+      # 4. TRANSCODE TO HLS (LOW DATA MODE)
       # ===============================
-      - name: Transcode (TikTok Low Data Mode)
+      - name: Transcode to HLS
         run: |
           mkdir output
 
@@ -46,12 +52,11 @@ jobs:
             output/master.m3u8
 
       # ===============================
-      # 3. UPLOAD TO R2 (NO AWS SDK)
+      # 5. UPLOAD HLS FILES TO R2
       # ===============================
       - name: Upload HLS to R2
         run: |
           for file in output/*; do
-
             echo "Uploading $file"
 
             curl -X PUT \
@@ -59,9 +64,7 @@ jobs:
               -H "Content-Type: application/octet-stream" \
               --data-binary @"$file" \
               "$R2_PUBLIC_URL/videos/$USER_ID/$VIDEO_ID/$(basename $file)"
-
           done
-
         env:
           R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
           R2_TOKEN: ${{ secrets.R2_TOKEN }}
@@ -69,7 +72,31 @@ jobs:
           VIDEO_ID: ${{ github.event.client_payload.video_id }}
 
       # ===============================
-      # 4. CLEANUP (OPTIONAL BUT RECOMMENDED)
+      # 6. UPDATE SUPABASE WITH PLAYBACK URL (🔥 IMPORTANT)
+      # ===============================
+      - name: Save HLS playback URL to Supabase
+        run: |
+          PLAYBACK_URL="$R2_PUBLIC_URL/videos/$USER_ID/$VIDEO_ID/master.m3u8"
+
+          echo "Playback URL: $PLAYBACK_URL"
+
+          curl -X PATCH "$SUPABASE_URL/rest/v1/videos?video_id=eq.$VIDEO_ID" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"video_url\": \"$PLAYBACK_URL\",
+              \"status\": \"ready\"
+            }"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+          USER_ID: ${{ github.event.client_payload.user_id }}
+          VIDEO_ID: ${{ github.event.client_payload.video_id }}
+
+      # ===============================
+      # 7. CLEANUP
       # ===============================
       - name: Cleanup
         run: rm -rf input output
