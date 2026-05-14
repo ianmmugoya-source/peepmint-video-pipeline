@@ -20,7 +20,7 @@ jobs:
           echo "USER ID = ${{ github.event.client_payload.user_id }}"
 
       # =====================================
-      # 2. FAST FFMPEG
+      # 2. SETUP FFMPEG
       # =====================================
       - name: Setup FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
@@ -44,9 +44,11 @@ jobs:
       # =====================================
       - name: Download Video
         run: |
+
           mkdir -p input
 
-          curl -L "${{ github.event.client_payload.video_url }}" \
+          curl -L \
+            "${{ github.event.client_payload.video_url }}" \
             -o input/video.mp4
 
           if [ ! -s input/video.mp4 ]; then
@@ -57,7 +59,7 @@ jobs:
           echo "✅ Download complete"
 
       # =====================================
-      # 6. FAST TRANSCODE
+      # 6. TRANSCODE TO HLS
       # =====================================
       - name: Transcode HLS
         run: |
@@ -67,11 +69,22 @@ jobs:
           ffmpeg -y \
             -i input/video.mp4 \
             -c:v libx264 \
-            -preset superfast \
-            -crf 34 \
+            -preset medium \
+            -crf 21 \
+            -profile:v high \
+            -level 4.1 \
+            -pix_fmt yuv420p \
+            -movflags +faststart \
+            -vf "scale='min(1080,iw)':-2" \
             -c:a aac \
-            -b:a 96k \
-            -hls_time 6 \
+            -b:a 128k \
+            -ar 48000 \
+            -ac 2 \
+            -g 48 \
+            -keyint_min 48 \
+            -sc_threshold 0 \
+            -max_muxing_queue_size 9999 \
+            -hls_time 4 \
             -hls_playlist_type vod \
             -hls_flags independent_segments \
             -hls_segment_filename "output/seg_%03d.ts" \
